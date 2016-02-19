@@ -8,30 +8,55 @@
   level from first 100 samples. 
 """
 
-
+dy_import_module_symbols("matrix.r2py")
+dy_import_module_symbols("stat_stream.r2py")
 
 
 
 class PreCalibration:
-	def __init__(self, current_time):
-		self.mag_list = []
-		self.start_time = current_time
-                self.time = current_time
-		self.average = 0.0
+  def __init__(self, samplenum):
+    self.samplenum = samplenum
+    self.mag_list = []
+    self.start_time = 0
+    self.time = 0
+    self.average = 0.0
+    self.gyro_stats = StatStream()
+    self.magnet_stats = StatStream()
+    self.acc_stats = StatStream()
         
 
+  # pre-calibration stage, initialize coefficient of filters and threshold of noise level 
+  def calibrate(self):
+    #log("Welcome to pedometer!\nSystem pre calibration, please wait a while\n")
+
+    while get_sensors() is None:
+      sleep(0.1)
+
+    self.start_time = getruntime()
+
+    count = 0
+    while count < self.samplenum:
+      self.time = getruntime()
+
+      try:
+	raw_data = get_sensors()
+      except Exception as e:
+        sleep(0.1)
+        continue
+
+     
+      mag = matrix_row_magnitude([raw_data['xforce'], raw_data['yforce'], raw_data['zforce']])
+      self.mag_list.append(mag)
+      self.acc_stats.update(mag)
+      self.gyro_stats.update(matrix_row_magnitude([raw_data['roll'], raw_data['pitch'], raw_data['yaw']]))
+      self.magnet_stats.update(matrix_row_magnitude([raw_data['xmag'], raw_data['ymag'], raw_data['zmag']]))
+      count += 1 
 
 
 
-	def update(self, data):
-		self.mag_list.append(data)
-		
 
-
-
-
-	# gravity constant estimated by mean of acceleration
-	def get_gravity(self):
+    # gravity constant estimated by mean of acceleration
+  def get_gravity(self):
 		sum_mag = 0
 		length = len(self.mag_list)
 		for i in range(0, length):

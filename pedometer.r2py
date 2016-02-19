@@ -90,8 +90,18 @@ def get_pedometer_data(step):
 
 # Peodmeter class, includes filtering raw data and step estimation
 class Pedometer:
-  def __init__(self):
-    self.calibrate()
+  def __init__(self, precalibration):
+    self.gravity_constant = precalibration.get_gravity()
+    self.moving_rate = precalibration.get_moving_rate()
+    self.threshold = precalibration.get_threshold()
+
+    # Initialize moving average filter and step detection
+    self.maf = MovingAverageFilter(moving_rate, precalibration.time, 0.125)
+    self.lpf = LowPassFilter(time, 0.25)
+
+    self.steptime = precalibration.time
+    #log_coefficient(gravity_constant, moving_rate, threshold)
+
 
     self.zerocount = 0
     self.lastmag = 0.0
@@ -105,41 +115,7 @@ class Pedometer:
     self.flag = 1
     
 
-  # pre-calibration stage, initialize coefficient of filters and threshold of noise level 
-  def calibrate(self):
-	#log("Welcome to pedometer!\nSystem pre calibration, please wait a while\n")
-
-    while get_sensors() is None:
-      sleep(0.1)
-
-    pre = PreCalibration(getruntime())
-    	
-    count = 0
-    while(count < PRE_LEARN_SAMPLE_NUMBER):
-      time = getruntime()
-
-      try:
-	raw_acc = get_sensors()
-      except Exception as e:
-        sleep(0.1)
-        continue
-
-      pre.update(mag_acceleration(sensor_raw_data))
-      count += 1 
-
-    # Get estimated coefficient at the end of pre-calibration stage
-    self.gravity_constant = pre.get_gravity()
-    self.moving_rate = pre.get_moving_rate(time)
-    self.threshold = pre.get_threshold()
-
-    # Initialize moving average filter and step detection
-    self.maf = MovingAverageFilter(moving_rate, time, 0.125)
-    self.lpf = LowPassFilter(time, 0.25)
-
-    self.steptime = time
-    #log_coefficient(gravity_constant, moving_rate, threshold)
-
-
+    
 
   def detect_step(self, method=0, raw_acc, time):	
 
@@ -153,7 +129,7 @@ class Pedometer:
     lpf_mag = self.LPF.low_pass_filter(raw_mag, time)
 
     
-    # step detectio
+    # step detection
     if method:
       return self._detect_peak(lpf_mag, time)
     else
