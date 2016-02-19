@@ -27,8 +27,8 @@ dy_import_module_symbols('step_peak.r2py')
 
 # constants for pre-calibratino stage
 PRE_LEARN_SAMPLE_NUMBER = 100
-MIN_STEP_INTERVAL = 0.25                  # Minimum time difference between each step in senconds
-
+ZERO_INTERVAL = 0.25                  # Minimum time difference between each step in senconds
+PEAK_INTERVAL = 0.5
 
 
 
@@ -80,48 +80,6 @@ def get_pedometer_data(step):
 
 
 
-# pre-calibration stage, initialize coefficient of filters and threshold of noise level 
-def pre_learn():
-	# main
-	log("Welcome to pedometer!\nSystem pre calibration, please wait a while\n")
-	start_time = getruntime()
-	count = 0
-	
-	while(count < PRE_LEARN_SAMPLE_NUMBER):
-		try:
-			current_time = getruntime()
-			sensor_raw_data = get_sensors()
-
-			# Before effecitve data collection, accelerometer return "None"
-			# Continue except effective data collection
-			if len(sensor_raw_data) == 0:
-				continue
-			count += 1
-
-			# Pre-calibration stage initilization and data collection
-			if count == 1:
-				pre = PreCalibration(current_time)	
-			pre.update(mag_acceleration(sensor_raw_data))
-		except Exception as e:
-		    log(str(e), '\n')
-		    stop_sensing()
-
-
-
-	# Get estimated coefficient at the end of pre-calibration stage
-	gravity_constant = pre.get_gravity()
-	moving_rate = pre.get_moving_rate(current_time)
-	threshold = pre.get_threshold()
-
-	# Initialize moving average filter and step detection
-	MAF = MovingAverageFilter(moving_rate, current_time, 0.125)
-	LPF = LowPassFilter(current_time, 0.25)
-	step_z = StepZeroCrossing(threshold, current_time, MIN_STEP_INTERVAL)
-	step_p = StepPeakSearch(threshold, current_time, MIN_STEP_INTERVAL * 2)
-	log_coefficient(gravity_constant, moving_rate, threshold)
-		
-	return {'gravity_constant':gravity_constant, 'MAF':MAF, 'LPF':LPF, 'step_z':step_z, 'step_p':step_p}
-
 
 
 
@@ -132,72 +90,125 @@ def pre_learn():
 
 # Peodmeter class, includes filtering raw data and step estimation
 class Pedometer:
-	def __init__(self, coefficient):
-		self.gravity_constant = coefficient['gravity_constant']
-		self.MAF = coefficient['MAF']
-		self.LPF = coefficient['LPF']
-		self.step_z = coefficient['step_z']
-		self.step_p = coefficient['step_p']
-		self.activate = False
+  def __init__(self):
+    self.calibrate()
+
+    self.zerocount = 0
+    self.lastmag = 0.0
+
+    self.peakcount = 0
+    self.peaktime = self.steptime
+    self.maglist = []
+    self.timelist = []
+    self.max_mag = self.threshold
+    self.max_time = self.peaktime
+    self.flag = 1
+    
+
+  # pre-calibration stage, initialize coefficient of filters and threshold of noise level 
+  def calibrate(self):
+	#log("Welcome to pedometer!\nSystem pre calibration, please wait a while\n")
+
+    while get_sensors() is None:
+      sleep(0.1)
+
+    pre = PreCalibration(getruntime())
+    	
+    count = 0
+    while(count < PRE_LEARN_SAMPLE_NUMBER):
+      time = getruntime()
+
+      try:
+	raw_acc = get_sensors()
+      except Exception as e:
+        sleep(0.1)
+        continue
+
+      pre.update(mag_acceleration(sensor_raw_data))
+      count += 1 
+
+    # Get estimated coefficient at the end of pre-calibration stage
+    self.gravity_constant = pre.get_gravity()
+    self.moving_rate = pre.get_moving_rate(time)
+    self.threshold = pre.get_threshold()
+
+    # Initialize moving average filter and step detection
+    self.maf = MovingAverageFilter(moving_rate, time, 0.125)
+    self.lpf = LowPassFilter(time, 0.25)
+
+    self.steptime = time
+    #log_coefficient(gravity_constant, moving_rate, threshold)
 
 
 
+  def detect_step(self, method=0, raw_acc, time):	
 
+    # Non-gravity acceleration
+    raw_mag = mag_acceleration(raw_acc) - self.gravity_constant
 
-	def _step_counter(self):	
-		# Startup step counter
-		def func():
-			while(self.activate):
-				try:
-					current_time = getruntime()
-					sensor_raw_data = get_sensors()	
-					# Non-gravity acceleration
-					sensor_data_noG = mag_acceleration(sensor_raw_data) - self.gravity_constant
+    # moving average filter
+    maf_mag = self.MAF.moving_average_filter(raw_mag, time)
 
+    # linear phase low pass filter
+    lpf_mag = self.LPF.low_pass_filter(raw_mag, time)
 
-					# moving average filter
-					mag_MAF = self.MAF.moving_average_filter(sensor_data_noG, current_time)
+    
+    # step detectio
+    if method:
+      return self._detect_peak(lpf_mag, time)
+    else
+      return self._detect_zero(lpf_mag, time)
+    # return self._detect_zero(lpf_mag, time) or self._detect_peak(lpf_mag, time)
 
-					# linear phase low pass filter
-					mag_LPF = self.LPF.low_pass_filter(sensor_data_noG, current_time)
+ 
 
-
-					# step detection
-					self.step_z.zero_counter(mag_LPF, current_time)
-					self.step_p.peak_search(mag_LPF, current_time)
-
-
-
-				except Exception as e:
-				    log(str(e), '\n')
-				    sleep(0.005)
-			
-			log("Step counter finished, thank you for your help!\n")
-		return(func)
+  def get_stepcount(self):
+    return (self.zerocount, self.peakcount) 
 
 
 
+  # crossing noise level and actual step interval > minimum step interval
+  def _detect_zero(self, data, time):
+    stepped = False
+    if self.lastmag <= self.threshold and data > self.threshold and \
+        time - self.steptime > ZERO_INTERVAL:
+      self.zerocount += 1
+      self.steptime = time
+      #log("Time:", time, "Step count:", self.zerocount, '\n')
+      self.lastmag = data
+      stepped = True
 
+    return stepped
 
-	def start(self):
-		self.activate = True
-		createthread(self._step_counter())
+	
+  # a moving window to capture the peak
+  # will change to queue later
+  def _detect_peak(self, data, time): 
+    stepped = False
+    self.maglist.append(data)
+    self.timelist.append(time)
 
+    if time - self.peaktime >= PEAK_INTERVAL * self.flag:
+      for i in range(1, len(self.maglist)-1):
+        if self.maglist[i-1] <= self.maglist[i] and self.maglist[i] > self.maglist[i+1] and \
+            self.maglist[i] > self.max_mag:
+	  self.max_mag = self.maglist[i]
+          self.max_time = self.timelist[i]
+	  self.flag = 0
 
-	def stop(self):
-		self.activate = False
-
-
-	def get_data(self):
-		peak_count = self.step_p.get_peak_count()
-		zero_count = self.step_z.get_zero_count()
-		return {'zero': zero_count, 'peak': peak_count}
-
-
-
-
-
-
-
+      if self.flag:
+        self.flag += 1
+      else:
+        self.flag = 1
+	self.peakcount += 1
+        stepped = True
+        self.peaktime = time
+        # self.last_max = self.max_mag
+        self.max_mag = self.threshold
+	# self.last_maxtime = self.maxtime
+        self.maglist = []
+	self.timelist = []
+  
+    return stepped
 
 # -*- mode: python;-*-

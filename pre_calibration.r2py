@@ -16,7 +16,9 @@ class PreCalibration:
 	def __init__(self, current_time):
 		self.mag_list = []
 		self.start_time = current_time
+                self.time = current_time
 		self.average = 0.0
+        
 
 
 
@@ -43,8 +45,8 @@ class PreCalibration:
 
 	# moving average filter windows size estimaed by sampling rate
 	# and minimum path interval
-	def get_moving_rate(self, time):
-		moving_average_sample = int(0.125/((time - self.start_time)/len(self.mag_list)))
+	def get_moving_rate(self):
+		moving_average_sample = int(0.125/((self.time - self.start_time)/len(self.mag_list)))
 		if moving_average_sample < 4:
 			moving_average_sample = 4
 		return moving_average_sample 
